@@ -28419,11 +28419,15 @@ task.spawn(function()
 			pcall(action.callback, value)
 		end
 	end
-	-- Momentary action (Refresh / Respawn style)
+	-- Momentary action (Refresh / Respawn style). Sirius resets .enabled after
+	-- `disableAfter` inside its own click handler, which the bridge path skips,
+	-- so we must replicate that reset or the native keybinds get stuck.
 	local function fireAction(action)
 		if not action then return end
 		action.enabled = true
-		pcall(action.callback, action.enabled)
+		pcall(action.callback) -- Sirius invokes these with no argument
+		local after = action.disableAfter or 0
+		task.delay(after, function() action.enabled = false end)
 	end
 	-- Drive a slider value + callback like Sirius does
 	local function setSlider(slider, value)
@@ -28432,15 +28436,22 @@ task.spawn(function()
 		pcall(slider.callback, value)
 	end
 
-	-- Native Sirius ScreenGui (so we can hide it and give a re-show toggle)
+	-- Native Sirius ScreenGui. Sirius parents it under gethui() when available,
+	-- otherwise CoreGui, so resolve it the same way or hiding it silently fails.
 	local nativeGui
 	do
-		local coreGui = game:GetService("CoreGui")
 		local name = bridge.siriusName or "Sirius"
-		nativeGui = coreGui:FindFirstChild(name)
+		local guiParent = (typeof(gethui) == "function" and gethui()) or game:GetService("CoreGui")
+		nativeGui = guiParent:FindFirstChild(name)
+		if not nativeGui then
+			nativeGui = game:GetService("CoreGui"):FindFirstChild(name) -- fallback
+		end
 		if nativeGui and nativeGui:IsA("ScreenGui") then
 			nativeGui.Enabled = false -- hide native, Gen3 is the face now
 		end
+	end
+	local function showNative(state)
+		if nativeGui then nativeGui.Enabled = state end
 	end
 
 	-- Window ------------------------------------------------------------------
@@ -28452,10 +28463,11 @@ task.spawn(function()
 		LoadingTitle = "Sirius X - NextGen",
 		LoadingSubtitle = "Sirius X reskinned in Gen3",
 		ToggleUIKeybind = "K",
+		-- Config saving is intentionally OFF: restoring saved state would
+		-- force-apply features on load (auto-noclip, or overriding a game's
+		-- own WalkSpeed/JumpPower/gravity), which is unsafe for exploit toggles.
 		ConfigurationSaving = {
-			Enabled = true,
-			FolderName = "SiriusXNextGen",
-			FileName = "Config",
+			Enabled = false,
 		},
 	})
 
@@ -28548,7 +28560,9 @@ task.spawn(function()
 
 	local sliderSpecs = {
 		{key = "player speed",       icon = "gauge",     suffix = ""},
-		{key = "jump power",         icon = "arrow-up",  suffix = ""},
+		-- Sirius renames this slider "jump height" at runtime on JumpHeight-based
+		-- games, so match the shared "jump" substring, not "jump power".
+		{key = "jump",               icon = "arrow-up",  suffix = ""},
 		{key = "flight speed",       icon = "plane",     suffix = ""},
 		{key = "field of view",      icon = "eye",       suffix = "\194\176"},
 		{key = "gravity",            icon = "arrow-down",suffix = ""},
@@ -28559,13 +28573,17 @@ task.spawn(function()
 		local s = findSlider(spec.key)
 		if s then
 			local range = s.values or {0, 100}
+			-- Snap the initial value to the (integer) increment so the label,
+			-- stored value and slider agree. gravity defaults to 196.2.
+			local initial = s.value or s.default or range[1] or 0
+			initial = math.floor(initial + 0.5)
 			Tuning:CreateSlider({
 				Name = s.name:gsub("^%l", string.upper),
 				Icon = spec.icon,
 				Range = {range[1] or 0, range[2] or 100},
 				Increment = 1,
 				Suffix = spec.suffix,
-				CurrentValue = s.value or s.default or range[1] or 0,
+				CurrentValue = initial,
 				Flag = "SX_" .. s.name,
 				Callback = function(v) setSlider(s, v) end,
 			})
@@ -28574,24 +28592,34 @@ task.spawn(function()
 
 	-- Interface tab -----------------------------------------------------------
 	local Interface = Window:CreateTab("Interface", "layout-grid")
-	Interface:CreateSection("Panels")
 
+	-- Forward reference so the panel buttons can sync the toggle's visual.
+	local nativeToggle
+
+	-- These panels (Scripts / Players / Music etc.) live inside Sirius's own
+	-- ScreenGui, which we hid on load. Opening one must re-show native first,
+	-- otherwise the button is a silent no-op.
+	local function openNativePanel(action)
+		showNative(true)
+		if nativeToggle then pcall(function() nativeToggle:Set(true) end) end
+		if bridge.runKeybindAction then pcall(bridge.runKeybindAction, action) end
+	end
+
+	Interface:CreateSection("Sirius Panels")
 	local keybindActions = {
-		{label = "Open Home",     action = "home",     icon = "home"},
-		{label = "Character",     action = "character", icon = "user"},
-		{label = "Scripts",       action = "scripts",  icon = "code"},
-		{label = "Players",       action = "players",  icon = "users"},
-		{label = "Music",         action = "music",    icon = "music"},
-		{label = "Settings",      action = "settings", icon = "settings"},
-		{label = "Command Search",action = "commandsearch", icon = "search"},
+		{label = "Home",           action = "home",     icon = "home"},
+		{label = "Character",      action = "character", icon = "user"},
+		{label = "Scripts",        action = "scripts",  icon = "code"},
+		{label = "Players",        action = "players",  icon = "users"},
+		{label = "Music",          action = "music",    icon = "music"},
+		{label = "Settings",       action = "settings", icon = "settings"},
+		{label = "Command Search", action = "commandsearch", icon = "search"},
 	}
 	for _, ka in ipairs(keybindActions) do
 		Interface:CreateButton({
-			Name = ka.label,
+			Name = "Open " .. ka.label,
 			Icon = ka.icon,
-			Callback = function()
-				if bridge.runKeybindAction then pcall(bridge.runKeybindAction, ka.action) end
-			end,
+			Callback = function() openNativePanel(ka.action) end,
 		})
 	end
 
@@ -28605,14 +28633,14 @@ task.spawn(function()
 	})
 
 	Interface:CreateSection("Native UI")
-	Interface:CreateToggle({
+	nativeToggle = Interface:CreateToggle({
 		Name = "Show original Sirius X UI",
 		Icon = "panel-top",
 		CurrentValue = false,
 		Flag = "SX_ShowNative",
-		Description = "Bring back Sirius X's built in interface alongside this Gen3 panel.",
+		Description = "Bring back Sirius X's built in interface. Note: it shares state with this panel, so a native button may look stale after you flip the same feature here.",
 		Callback = function(v)
-			if nativeGui then nativeGui.Enabled = v end
+			showNative(v)
 		end,
 	})
 
@@ -28622,6 +28650,4 @@ task.spawn(function()
 		Duration = 6,
 		Image = "sparkles",
 	})
-
-	pcall(function() Rayfield:LoadConfiguration() end)
 end)
