@@ -5736,7 +5736,7 @@ local siriusValues = {
 			},
 	}
 }
-do local __g = (type(getgenv)=="function") and getgenv() or _G; __g.__SIRIUSX_BRIDGE = siriusValues; _G.__SIRIUSX_BRIDGE = siriusValues end -- [NextGen bridge: main]
+do local __g = (type(getgenv)=="function") and getgenv() or _G; __g.__SIRIUSX_BRIDGE = siriusValues; _G.__SIRIUSX_BRIDGE = siriusValues; siriusValues.espContainer = espContainer end -- [NextGen bridge: main]
 
 local dylanfocExecutorPresets = {
 	"Synapse X",
@@ -28726,6 +28726,62 @@ task.spawn(function()
 		Callback = function() withTarget(function(p) if wield and wield.Rocket then pcall(wield.Rocket, p, 50, "Rocket Target") end end) end })
 	Playerlist:CreateButton({ Name = "GODSPEED Rocket",
 		Callback = function() withTarget(function(p) if wield and wield.Rocket then pcall(wield.Rocket, p, 5000, "GODSPEED Rocket") end end) end })
+
+	-- ==========================================================================
+	-- VISUALS tab -- ESP colour, using the Gen2 colour picker (Gen3 copied it
+	-- from Gen2 verbatim; Glow=false runs the identical Gen2 code path).
+	-- ==========================================================================
+	do
+		local espContainer = bridge.espContainer
+		local Visuals = Window:CreateTab("Visuals", "palette")
+		local espOutline = Color3.new(1, 1, 1)
+		local espFill = Color3.fromRGB(215, 224, 235)
+		local espFillT = 1  -- 1 = fill invisible (Sirius default), 0 = solid
+
+		local function paintHighlight(h)
+			if h and h:IsA("Highlight") then
+				h.OutlineColor = espOutline
+				h.FillColor = espFill
+				h.FillTransparency = espFillT
+			end
+		end
+		local function applyEsp()
+			if not espContainer then return end
+			for _, h in ipairs(espContainer:GetChildren()) do paintHighlight(h) end
+		end
+		if espContainer then
+			espContainer.ChildAdded:Connect(function(child)
+				task.defer(paintHighlight, child)
+			end)
+		end
+
+		Visuals:CreateSection("ESP Colour")
+		if not espContainer then
+			Visuals:CreateParagraph({ Title = "ESP unavailable",
+				Content = "This Sirius build did not expose the ESP container." })
+		else
+			Visuals:CreateColorPicker({
+				Name = "Outline Colour", Color = espOutline, Glow = false,
+				Flag = "SX_esp_outline",
+				Callback = function(c) espOutline = c; applyEsp() end,
+			})
+			Visuals:CreateColorPicker({
+				Name = "Fill Colour", Color = espFill, Glow = false,
+				Flag = "SX_esp_fill",
+				Callback = function(c) espFill = c; applyEsp() end,
+			})
+			Visuals:CreateSlider({
+				Name = "Fill Opacity", Icon = "droplet",
+				Range = { 0, 100 }, Increment = 1, Suffix = "%",
+				CurrentValue = 0, Flag = "SX_esp_fillop",
+				Callback = function(v) espFillT = 1 - (v / 100); applyEsp() end,
+			})
+			Visuals:CreateButton({
+				Name = "Apply to current ESP", Icon = "check",
+				Callback = function() applyEsp() end,
+			})
+		end
+	end
 
 	-- ==========================================================================
 	-- SCRIPTS tab (reimplemented data layer: 3 marketplaces + loadstring)
