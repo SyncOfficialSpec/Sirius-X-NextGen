@@ -5736,7 +5736,7 @@ local siriusValues = {
 			},
 	}
 }
-do local __g = (type(getgenv)=="function") and getgenv() or _G; __g.__SIRIUSX_BRIDGE = siriusValues; _G.__SIRIUSX_BRIDGE = siriusValues end -- [Sirius X - NextGen bridge]
+do local __g = (type(getgenv)=="function") and getgenv() or _G; __g.__SIRIUSX_BRIDGE = siriusValues; _G.__SIRIUSX_BRIDGE = siriusValues end -- [NextGen bridge: main]
 
 local dylanfocExecutorPresets = {
 	"Synapse X",
@@ -16856,6 +16856,7 @@ end
 	playerActionSystem.getSpectateTarget = function()
 		return spectateState.targetPlayer
 	end
+do local b = _G.__SIRIUSX_BRIDGE; if b then b.playerActions = { spectate = startSpectating, stopSpectate = stopSpectating, esp = _picker.togglePlayerEsp, tracer = togglePlayerTracer, hide = hiddenPlayerTools.Toggle, track = _picker.startTrackingPlayer, liveTrack = _picker.startLiveTrackingPlayer, wieldingTools = wieldingTools, stopAll = playerActionSystem.stopAllPlayerActions } end end -- [NextGen bridge: players]
 end
 
 local function checkLastVersion()
@@ -18580,6 +18581,7 @@ openMusicPlayerForTrack = function(track, index)
 
 	playMusicTrack(track, index)
 end
+do local b = _G.__SIRIUSX_BRIDGE; if b then b.music = { state = musicLibraryState, play = playMusicTrack, stop = stopMusicTrack, openOrResume = openMusicPlayerForTrack, parse = parseRobloxMusicLibrary, ensureAudio = ensureMusicAudio } end end -- [NextGen bridge: music]
 
 local function createMusicLibraryRow(track, index, token)
 	local rowTemplate = settingsPanel.SettingLists.Template:FindFirstChild("SwitchTemplate")
@@ -26150,6 +26152,7 @@ function dylanfocClient.cycleDropdown(setting, row)
 	dylanfocClient.setRowDescription(row, "Current: "..dylanfocClient.shortValue(setting.current, 96))
 end
 
+do local b = _G.__SIRIUSX_BRIDGE; if b then b.settingsList = siriusSettings; b.checkSetting = checkSetting; b.saveSettings = saveSettings; b.dylanfocClient = dylanfocClient end end -- [NextGen bridge: settings]
 local function assembleSettings()
 	if siriusValues.captureKeybindDefaults then
 		siriusValues.captureKeybindDefaults()
@@ -28362,31 +28365,34 @@ end)
 
 --[[ ==========================================================================
 	Sirius X - NextGen
-	Real Sirius X (above) running underneath, presented through the
-	Rayfield Gen 3 Concept UI. This front-end drives Sirius's own feature
-	tables (exposed via the bridge injected above), so every toggle/slider
-	fires the exact same callback path Sirius uses internally.
+	Real Sirius X (above) runs underneath. Bridge injections expose its own
+	feature tables / functions, and this Gen3 Rayfield front-end rebuilds every
+	panel (Home, Character, Tuning, Players, Scripts, Music, Settings) as a tab
+	that drives the exact same Sirius code paths.
 ============================================================================ ]]
 
 task.spawn(function()
+	local players = game:GetService("Players")
+	local localPlayer = players.LocalPlayer
+	local statsService = game:GetService("Stats")
+	local httpService = game:GetService("HttpService")
 
-	-- Wait for the Sirius bridge that was injected into siriusValues
+	-- Wait for the Sirius bridge injected into siriusValues -------------------
 	local bridge
 	do
 		local t0 = os.clock()
 		repeat
-			bridge = getgenv and getgenv().__SIRIUSX_BRIDGE or _G.__SIRIUSX_BRIDGE
+			bridge = (getgenv and getgenv().__SIRIUSX_BRIDGE) or _G.__SIRIUSX_BRIDGE
 			if bridge then break end
 			task.wait(0.1)
 		until (os.clock() - t0) > 20
 	end
-
 	if not bridge or not bridge.actions or not bridge.sliders then
 		warn("[Sirius X - NextGen] Could not reach the Sirius feature bridge; native Sirius UI is still available.")
 		return
 	end
 
-	-- Load the Gen3 Rayfield concept UI library
+	-- Load the Gen3 Rayfield concept UI library -------------------------------
 	local ok, Rayfield = pcall(function()
 		return loadstring(game:HttpGet(
 			"https://raw.githubusercontent.com/SyncOfficialSpec/Rayfield_Gen_3_Concept/main/source.lua"
@@ -28397,7 +28403,33 @@ task.spawn(function()
 		return
 	end
 
-	-- Helpers -----------------------------------------------------------------
+	local function notify(title, content, dur)
+		pcall(function()
+			Rayfield:Notify({ Title = title, Content = content, Duration = dur or 4, Image = "sparkles" })
+		end)
+	end
+
+	-- Clipboard + command helpers --------------------------------------------
+	local setclip = setclipboard or set_clipboard or toclipboard or (syn and syn.write_clipboard)
+
+	-- Run an Infinite Yield command through Sirius's own integrated bridge.
+	-- runIntegratedIYCommand is a global in the Sirius chunk; the IY bridge is a
+	-- second fallback. Handles rejoin / serverhop / goto <player> / etc.
+	local function runCommand(text)
+		if not text or text == "" then return false end
+		if type(runIntegratedIYCommand) == "function" then
+			pcall(runIntegratedIYCommand, text)
+			return true
+		end
+		local iy = _G.__SIRIUS_IY_BRIDGE
+		if iy and type(iy.execCmd) == "function" then
+			pcall(iy.execCmd, text, localPlayer, true)
+			return true
+		end
+		return false
+	end
+
+	-- Feature-table helpers (Character + Tuning) ------------------------------
 	local function findAction(name)
 		local target = tostring(name):lower()
 		for _, a in ipairs(bridge.actions) do
@@ -28410,8 +28442,6 @@ task.spawn(function()
 			if s.name and s.name:lower():find(target, 1, true) then return s end
 		end
 	end
-
-	-- Drive a toggle exactly like Sirius's own keybind path does
 	local function setToggle(action, value)
 		if not action then return end
 		if action.enabled ~= value then
@@ -28419,35 +28449,30 @@ task.spawn(function()
 			pcall(action.callback, value)
 		end
 	end
-	-- Momentary action (Refresh / Respawn style). Sirius resets .enabled after
-	-- `disableAfter` inside its own click handler, which the bridge path skips,
-	-- so we must replicate that reset or the native keybinds get stuck.
 	local function fireAction(action)
 		if not action then return end
 		action.enabled = true
-		pcall(action.callback) -- Sirius invokes these with no argument
+		pcall(action.callback)
 		local after = action.disableAfter or 0
 		task.delay(after, function() action.enabled = false end)
 	end
-	-- Drive a slider value + callback like Sirius does
 	local function setSlider(slider, value)
 		if not slider then return end
 		slider.value = value
 		pcall(slider.callback, value)
 	end
 
-	-- Native Sirius ScreenGui. Sirius parents it under gethui() when available,
-	-- otherwise CoreGui, so resolve it the same way or hiding it silently fails.
+	-- Native Sirius ScreenGui (hide it; Gen3 is the face) ---------------------
 	local nativeGui
 	do
 		local name = bridge.siriusName or "Sirius"
 		local guiParent = (typeof(gethui) == "function" and gethui()) or game:GetService("CoreGui")
 		nativeGui = guiParent:FindFirstChild(name)
 		if not nativeGui then
-			nativeGui = game:GetService("CoreGui"):FindFirstChild(name) -- fallback
+			nativeGui = game:GetService("CoreGui"):FindFirstChild(name)
 		end
 		if nativeGui and nativeGui:IsA("ScreenGui") then
-			nativeGui.Enabled = false -- hide native, Gen3 is the face now
+			nativeGui.Enabled = false
 		end
 	end
 	local function showNative(state)
@@ -28463,76 +28488,100 @@ task.spawn(function()
 		LoadingTitle = "Sirius X - NextGen",
 		LoadingSubtitle = "Sirius X reskinned in Gen3",
 		ToggleUIKeybind = "K",
-		-- Config saving is intentionally OFF: restoring saved state would
-		-- force-apply features on load (auto-noclip, or overriding a game's
-		-- own WalkSpeed/JumpPower/gravity), which is unsafe for exploit toggles.
-		ConfigurationSaving = {
-			Enabled = false,
-		},
+		-- Config saving OFF: restoring state would force-apply features on load.
+		ConfigurationSaving = { Enabled = false },
 	})
 
-	-- Character tab (all 16 action toggles) -----------------------------------
-	local Character = Window:CreateTab("Character", "user")
-	Character:CreateSection("Movement")
+	-- ==========================================================================
+	-- HOME tab
+	-- ==========================================================================
+	local Home = Window:CreateTab("Home", "house")
+	Home:CreateSection("Server")
+	local pingStat    = Home:CreateStat({ Name = "Ping",    Icon = "activity", Value = "--" })
+	local playersStat = Home:CreateStat({ Name = "Players", Icon = "users",    Value = "--" })
+	local fpsStat     = Home:CreateStat({ Name = "FPS",     Icon = "gauge",    Value = "--" })
+	task.spawn(function()
+		while true do
+			pcall(function()
+				local ping = statsService.Network.ServerStatsItem["Data Ping"]:GetValue()
+				pingStat:Set({ Value = math.floor(ping) .. "ms" })
+			end)
+			pcall(function()
+				playersStat:Set({ Value = #players:GetPlayers() .. "/" .. players.MaxPlayers })
+			end)
+			pcall(function()
+				fpsStat:Set({ Value = tostring(math.floor(workspace:GetRealPhysicsFPS())) })
+			end)
+			task.wait(1)
+		end
+	end)
 
-	local toggleSpecs = {
-		{key = "Noclip",                 icon = "ghost"},
-		{key = "Flight",                 icon = "plane"},
-		{key = "Infinite Jump",          icon = "arrow-up"},
-		{key = "Walk in Air",            icon = "footprints"},
-		{key = "Anti Void",              icon = "shield"},
-		{key = "Ghost Mode",             icon = "eye"},   -- "Ghost Mode / Spectate"
-		{key = "Invisibility",           icon = "eye-off"},
-	}
-	for _, spec in ipairs(toggleSpecs) do
-		local a = findAction(spec.key)
+	Home:CreateSection("Quick Actions")
+	Home:CreateButton({ Name = "Rejoin Server", Icon = "rotate-ccw",
+		Callback = function() if not runCommand("rejoin") then notify("Home", "Commands not ready yet.") end end })
+	Home:CreateButton({ Name = "Server Hop", Icon = "shuffle",
+		Callback = function() if not runCommand("serverhop") then notify("Home", "Commands not ready yet.") end end })
+	Home:CreateButton({ Name = "Copy Job Id", Icon = "clipboard",
+		Callback = function()
+			if setclip then pcall(setclip, tostring(game.JobId)); notify("Home", "Job Id copied.")
+			else notify("Home", "Clipboard unavailable on this executor.") end
+		end })
+
+	Home:CreateSection("Command Console")
+	Home:CreateInput({
+		Name = "Run Command",
+		PlaceholderText = "fly, goto Player, god, ws 50 ...",
+		CurrentValue = "",
+		Callback = function(text)
+			if not runCommand(text) then
+				notify("Commands", "Infinite Yield is still loading, try again in a moment.")
+			end
+		end,
+	})
+	for _, c in ipairs({
+		{ "Anti AFK", "antiafk", "coffee" },
+		{ "Full Bright", "fullbright", "sun" },
+		{ "Boost FPS", "boostfps", "zap" },
+	}) do
+		Home:CreateButton({ Name = c[1], Icon = c[3], Callback = function() runCommand(c[2]) end })
+	end
+
+	-- ==========================================================================
+	-- CHARACTER tab (16 action toggles)
+	-- ==========================================================================
+	local Character = Window:CreateTab("Character", "user")
+
+	local function addToggle(tab, key, icon)
+		local a = findAction(key)
 		if a then
-			Character:CreateToggle({
+			tab:CreateToggle({
 				Name = a.name,
-				Icon = spec.icon,
+				Icon = icon,
 				CurrentValue = a.enabled == true,
 				Flag = "SX_" .. a.name,
 				Callback = function(v) setToggle(a, v) end,
 			})
 		end
 	end
+
+	Character:CreateSection("Movement")
+	addToggle(Character, "Noclip", "ghost")
+	addToggle(Character, "Flight", "plane")
+	addToggle(Character, "Infinite Jump", "arrow-up")
+	addToggle(Character, "Walk in Air", "footprints")
+	addToggle(Character, "Anti Void", "shield")
+	addToggle(Character, "Ghost Mode", "eye")
+	addToggle(Character, "Invisibility", "eye-off")
 
 	Character:CreateSection("Combat & Visuals")
-	local combatSpecs = {
-		{key = "Extrasensory",  icon = "radar"},   -- ESP
-		{key = "Auto Find",     icon = "crosshair"},
-		{key = "Fling",         icon = "wind"},
-		{key = "Shaders",       icon = "sun"},
-	}
-	for _, spec in ipairs(combatSpecs) do
-		local a = findAction(spec.key)
-		if a then
-			Character:CreateToggle({
-				Name = a.name,
-				Icon = spec.icon,
-				CurrentValue = a.enabled == true,
-				Flag = "SX_" .. a.name,
-				Callback = function(v) setToggle(a, v) end,
-			})
-		end
-	end
+	addToggle(Character, "Extrasensory", "radar")
+	addToggle(Character, "Auto Find", "crosshair")
+	addToggle(Character, "Fling", "wind")
+	addToggle(Character, "Shaders", "sun")
 
 	Character:CreateSection("World")
-	for _, spec in ipairs({
-		{key = "Night and Day", icon = "moon"},
-		{key = "Global Audio",  icon = "volume-2"},
-	}) do
-		local a = findAction(spec.key)
-		if a then
-			Character:CreateToggle({
-				Name = a.name,
-				Icon = spec.icon,
-				CurrentValue = a.enabled == true,
-				Flag = "SX_" .. a.name,
-				Callback = function(v) setToggle(a, v) end,
-			})
-		end
-	end
+	addToggle(Character, "Night and Day", "moon")
+	addToggle(Character, "Global Audio", "volume-2")
 
 	Character:CreateSection("Actions")
 	do
@@ -28546,41 +28595,33 @@ task.spawn(function()
 			Character:CreateButton({ Name = "Respawn", Icon = "rotate-ccw",
 				Callback = function() fireAction(respawn) end })
 		end
-		local clickTp = findAction("click teleport")
-		if clickTp then
-			Character:CreateToggle({ Name = clickTp.name, Icon = "mouse-pointer-click",
-				CurrentValue = clickTp.enabled == true, Flag = "SX_ClickTP",
-				Callback = function(v) setToggle(clickTp, v) end })
-		end
+		addToggle(Character, "click teleport", "mouse-pointer-click")
 	end
 
-	-- Tuning tab (all 7 sliders) ----------------------------------------------
+	-- ==========================================================================
+	-- TUNING tab (7 sliders)
+	-- ==========================================================================
 	local Tuning = Window:CreateTab("Tuning", "sliders-horizontal")
 	Tuning:CreateSection("Character Tuning")
-
 	local sliderSpecs = {
-		{key = "player speed",       icon = "gauge",     suffix = ""},
-		-- Sirius renames this slider "jump height" at runtime on JumpHeight-based
-		-- games, so match the shared "jump" substring, not "jump power".
-		{key = "jump",               icon = "arrow-up",  suffix = ""},
-		{key = "flight speed",       icon = "plane",     suffix = ""},
-		{key = "field of view",      icon = "eye",       suffix = "\194\176"},
-		{key = "gravity",            icon = "arrow-down",suffix = ""},
-		{key = "smooth screen blur", icon = "droplet",   suffix = ""},
-		{key = "auto aim",           icon = "crosshair", suffix = "%"},
+		{ key = "player speed",       icon = "gauge",      suffix = "" },
+		{ key = "jump",               icon = "arrow-up",   suffix = "" },   -- "jump power" or "jump height"
+		{ key = "flight speed",       icon = "plane",      suffix = "" },
+		{ key = "field of view",      icon = "eye",        suffix = "\194\176" },
+		{ key = "gravity",            icon = "arrow-down", suffix = "" },
+		{ key = "smooth screen blur", icon = "droplet",    suffix = "" },
+		{ key = "auto aim",           icon = "crosshair",  suffix = "%" },
 	}
 	for _, spec in ipairs(sliderSpecs) do
 		local s = findSlider(spec.key)
 		if s then
-			local range = s.values or {0, 100}
-			-- Snap the initial value to the (integer) increment so the label,
-			-- stored value and slider agree. gravity defaults to 196.2.
-			local initial = s.value or s.default or range[1] or 0
-			initial = math.floor(initial + 0.5)
+			local range = s.values or { 0, 100 }
+			local lo, hi = range[1] or 0, range[2] or 100
+			local initial = math.clamp(math.floor((s.value or s.default or lo) + 0.5), lo, hi)
 			Tuning:CreateSlider({
 				Name = s.name:gsub("^%l", string.upper),
 				Icon = spec.icon,
-				Range = {range[1] or 0, range[2] or 100},
+				Range = { lo, hi },
 				Increment = 1,
 				Suffix = spec.suffix,
 				CurrentValue = initial,
@@ -28590,47 +28631,449 @@ task.spawn(function()
 		end
 	end
 
-	-- Interface tab -----------------------------------------------------------
-	local Interface = Window:CreateTab("Interface", "layout-grid")
+	-- ==========================================================================
+	-- PLAYERS tab
+	-- ==========================================================================
+	local pa = bridge.playerActions or {}
+	local Playerlist = Window:CreateTab("Players", "users")
+	local selectedName
 
-	-- Forward reference so the panel buttons can sync the toggle's visual.
-	local nativeToggle
-
-	-- These panels (Scripts / Players / Music etc.) live inside Sirius's own
-	-- ScreenGui, which we hid on load. Opening one must re-show native first,
-	-- otherwise the button is a silent no-op.
-	local function openNativePanel(action)
-		showNative(true)
-		if nativeToggle then pcall(function() nativeToggle:Set(true) end) end
-		if bridge.runKeybindAction then pcall(bridge.runKeybindAction, action) end
+	local function playerNames()
+		local t = {}
+		for _, p in ipairs(players:GetPlayers()) do
+			if p ~= localPlayer then table.insert(t, p.Name) end
+		end
+		table.sort(t)
+		return t
+	end
+	local function target()
+		if not selectedName then return nil end
+		return players:FindFirstChild(selectedName)
+	end
+	local function withTarget(fn)
+		local p = target()
+		if not p then notify("Players", "Select a player first."); return end
+		pcall(fn, p)
 	end
 
-	Interface:CreateSection("Sirius Panels")
-	local keybindActions = {
-		{label = "Home",           action = "home",     icon = "home"},
-		{label = "Character",      action = "character", icon = "user"},
-		{label = "Scripts",        action = "scripts",  icon = "code"},
-		{label = "Players",        action = "players",  icon = "users"},
-		{label = "Music",          action = "music",    icon = "music"},
-		{label = "Settings",       action = "settings", icon = "settings"},
-		{label = "Command Search", action = "commandsearch", icon = "search"},
-	}
-	for _, ka in ipairs(keybindActions) do
-		Interface:CreateButton({
-			Name = "Open " .. ka.label,
-			Icon = ka.icon,
-			Callback = function() openNativePanel(ka.action) end,
+	Playerlist:CreateSection("Target")
+	local playerDropdown = Playerlist:CreateDropdown({
+		Name = "Select Player",
+		Options = playerNames(),
+		CurrentOption = {},
+		Callback = function(sel) selectedName = sel[1] end,
+	})
+	Playerlist:CreateButton({ Name = "Refresh List", Icon = "refresh-cw",
+		Callback = function() pcall(function() playerDropdown:Refresh(playerNames()) end) end })
+	players.PlayerAdded:Connect(function() pcall(function() playerDropdown:Refresh(playerNames()) end) end)
+	players.PlayerRemoving:Connect(function() pcall(function() playerDropdown:Refresh(playerNames()) end) end)
+
+	Playerlist:CreateSection("View")
+	Playerlist:CreateButton({ Name = "Spectate", Icon = "eye",
+		Callback = function() withTarget(function(p) if pa.spectate then pa.spectate(p) end end) end })
+	Playerlist:CreateButton({ Name = "Stop Spectate", Icon = "eye-off",
+		Callback = function() if pa.stopSpectate then pcall(pa.stopSpectate, "Stopped from NextGen") end end })
+	Playerlist:CreateButton({ Name = "Teleport To", Icon = "move",
+		Callback = function() withTarget(function(p) runCommand("goto " .. p.Name) end) end })
+
+	Playerlist:CreateSection("Markers")
+	local function markerBtn(label, icon, fnKey)
+		Playerlist:CreateButton({ Name = label, Icon = icon,
+			Callback = function()
+				withTarget(function(p)
+					local fn = pa[fnKey]
+					if not fn then notify("Players", label .. " unavailable."); return end
+					local enabled = fn(p)
+					if type(enabled) == "boolean" then
+						notify(label, p.Name .. ": " .. (enabled and "on" or "off"), 3)
+					end
+				end)
+			end })
+	end
+	markerBtn("Toggle ESP", "radar", "esp")
+	markerBtn("Toggle Tracer", "git-commit-horizontal", "tracer")
+	markerBtn("Toggle Hide (local)", "eye-off", "hide")
+	markerBtn("Track", "map-pin", "track")
+	markerBtn("Live Track", "navigation", "liveTrack")
+
+	Playerlist:CreateSection("Wielding")
+	local wield = pa.wieldingTools
+	local function wieldBtn(label, ability)
+		Playerlist:CreateButton({ Name = label,
+			Callback = function()
+				withTarget(function(p)
+					if wield and wield.Toggle then pcall(wield.Toggle, p, ability)
+					else notify("Players", "Wielding unavailable.") end
+				end)
+			end })
+	end
+	wieldBtn("Fling Player", "FlingPlayer")
+	wieldBtn("Fling 2.0", "Fling2")
+	wieldBtn("Platform Fly", "PlatformFly")
+	wieldBtn("Magic Carpet", "MagicCarpet")
+	wieldBtn("Elevator", "Elevator")
+	wieldBtn("Anti Jump", "AntiJump")
+	wieldBtn("Infinite Jump", "InfiniteJump")
+	wieldBtn("Speed Boost Slow", "SpeedSlow")
+	wieldBtn("Speed Boost Medium", "SpeedMedium")
+	wieldBtn("Speed Boost Fast", "SpeedFast")
+	wieldBtn("Movement Breaker", "MovementBreaker")
+	Playerlist:CreateButton({ Name = "Stop Wielding", Icon = "octagon-x",
+		Callback = function() if wield and wield.Stop then pcall(wield.Stop, false) end end })
+
+	Playerlist:CreateSection("Rockets")
+	Playerlist:CreateButton({ Name = "Rocket Target",
+		Callback = function() withTarget(function(p) if wield and wield.Rocket then pcall(wield.Rocket, p, 50, "Rocket Target") end end) end })
+	Playerlist:CreateButton({ Name = "GODSPEED Rocket",
+		Callback = function() withTarget(function(p) if wield and wield.Rocket then pcall(wield.Rocket, p, 5000, "GODSPEED Rocket") end end) end })
+
+	-- ==========================================================================
+	-- SCRIPTS tab (reimplemented data layer: 3 marketplaces + loadstring)
+	-- ==========================================================================
+	local Scripts = Window:CreateTab("Scripts", "code")
+	do
+		local httpRequest = (syn and syn.request) or (http and http.request) or http_request or request
+			or (fluxus and fluxus.request)
+		local sourceEnabled = { scriptblox = true, rscripts = true, roscripts = true }
+		local lastResults = {}      -- label -> normalized result
+		local resultDropdown
+
+		local function httpGet(url)
+			if httpRequest then
+				local res = httpRequest({ Url = url, Method = "GET" })
+				return res and res.Body
+			end
+			return game:HttpGet(url)
+		end
+
+		local function fetchScripts(query)
+			local out = {}
+			local q = httpService:UrlEncode(query)
+			if sourceEnabled.scriptblox then
+				pcall(function()
+					local body = httpGet("https://scriptblox.com/api/script/search?q=" .. q .. "&mode=free&max=20&page=1")
+					local data = httpService:JSONDecode(body)
+					for _, s in ipairs(data.result and data.result.scripts or {}) do
+						table.insert(out, {
+							provider = "ScriptBlox",
+							title = s.title or s.name or "Untitled",
+							author = (s.owner and s.owner.username) or "?",
+							script = s.script,
+							slug = s.slug,
+						})
+					end
+				end)
+			end
+			if sourceEnabled.rscripts then
+				pcall(function()
+					local body = httpGet("https://rscripts.net/api/v2/scripts?page=1&orderBy=date&sort=desc&notPaid=true&q=" .. q)
+					local data = httpService:JSONDecode(body)
+					for _, s in ipairs(data.scripts or {}) do
+						table.insert(out, {
+							provider = "Rscripts.net",
+							title = s.title or s.name or "Untitled",
+							author = (s.user and s.user.username) or "?",
+							rawScriptUrl = s.rawScript,
+						})
+					end
+				end)
+			end
+			if sourceEnabled.roscripts then
+				pcall(function()
+					local body = httpGet("https://roscripts.io/api/search?q=" .. q)
+					local data = httpService:JSONDecode(body)
+					for _, s in ipairs(data.results or {}) do
+						table.insert(out, {
+							provider = "Roscripts.io",
+							title = s.title or s.name or "Untitled",
+							author = s.author or "?",
+							detailUrl = "https://roscripts.io/s/" .. tostring(s.slug),
+						})
+					end
+				end)
+			end
+			return out
+		end
+
+		local function resolveSource(result)
+			if result.script and result.script ~= "" then return result.script end
+			-- ScriptBlox: fetch the script detail by slug for the inline source
+			if result.provider == "ScriptBlox" and result.slug then
+				local body = httpGet("https://scriptblox.com/api/script/" .. result.slug)
+				local ok2, data = pcall(function() return httpService:JSONDecode(body) end)
+				if ok2 and data and data.script and data.script.script then
+					return data.script.script
+				end
+			end
+			local url = result.rawScriptUrl
+			if not url and result.provider == "Roscripts.io" and result.detailUrl then
+				local page = httpGet(result.detailUrl) or ""
+				url = page:match('href="(https://script%.roscripts%.io/[^"]+)"')
+			end
+			if url then return httpGet(url) end
+			return nil
+		end
+
+		Scripts:CreateSection("Sources")
+		Scripts:CreateToggle({ Name = "ScriptBlox", CurrentValue = true, Flag = "SX_src_sb",
+			Callback = function(v) sourceEnabled.scriptblox = v end })
+		Scripts:CreateToggle({ Name = "Rscripts.net", CurrentValue = true, Flag = "SX_src_rs",
+			Callback = function(v) sourceEnabled.rscripts = v end })
+		Scripts:CreateToggle({ Name = "Roscripts.io", CurrentValue = true, Flag = "SX_src_ro",
+			Callback = function(v) sourceEnabled.roscripts = v end })
+
+		Scripts:CreateSection("Search")
+		Scripts:CreateInput({
+			Name = "Search Scripts",
+			PlaceholderText = "e.g. Blox Fruits, Arsenal ...",
+			CurrentValue = "",
+			Callback = function(query)
+				if query == "" then return end
+				notify("Scripts", "Searching...")
+				task.spawn(function()
+					local results = fetchScripts(query)
+					lastResults = {}
+					local labels = {}
+					for _, r in ipairs(results) do
+						local label = ("[%s] %s - %s"):format(r.provider, r.title, r.author)
+						if not lastResults[label] then
+							lastResults[label] = r
+							table.insert(labels, label)
+						end
+						if #labels >= 60 then break end
+					end
+					if resultDropdown then pcall(function() resultDropdown:Refresh(labels) end) end
+					notify("Scripts", #labels .. " result(s). Pick one below and Execute.", 5)
+				end)
+			end,
+		})
+		resultDropdown = Scripts:CreateDropdown({
+			Name = "Results",
+			Options = {},
+			CurrentOption = {},
+			Callback = function(sel) Scripts._selectedScript = sel[1] end,
+		})
+		Scripts:CreateButton({
+			Name = "Execute Selected",
+			Icon = "play",
+			Callback = function()
+				local label = Scripts._selectedScript
+				local result = label and lastResults[label]
+				if not result then notify("Scripts", "Search, then pick a result first."); return end
+				task.spawn(function()
+					local src = resolveSource(result)
+					if not src then notify("Scripts", "Could not fetch script source."); return end
+					local fn, err = loadstring(src)
+					if not fn then notify("Scripts", "Compile error: " .. tostring(err), 6); return end
+					local okRun, runErr = pcall(fn)
+					if not okRun then notify("Scripts", "Runtime error: " .. tostring(runErr), 6)
+					else notify("Scripts", "Executed: " .. result.title, 4) end
+				end)
+			end,
 		})
 	end
 
+	-- ==========================================================================
+	-- MUSIC tab
+	-- ==========================================================================
+	local music = bridge.music
+	if music and music.state then
+		if music.parse then pcall(music.parse) end
+		local state = music.state
+		local Music = Window:CreateTab("Music", "music")
+
+		local sections = { "All" }
+		for _, s in ipairs(state.sections or {}) do table.insert(sections, s) end
+
+		local currentList = {}   -- ordered {label=..., track=...}
+		local labelToTrack = {}
+		local selectedLabel
+		local selectedIndex = 0
+
+		local function buildList(genre)
+			currentList = {}
+			labelToTrack = {}
+			for _, tr in ipairs(state.library or {}) do
+				if genre == "All" or tr.section == genre then
+					local label = (tr.title or "?") .. " - " .. (tr.artist or "?")
+					if not labelToTrack[label] then
+						labelToTrack[label] = tr
+						table.insert(currentList, label)
+						if #currentList >= 150 then break end
+					end
+				end
+			end
+			return currentList
+		end
+
+		local function audioObj()
+			if music.ensureAudio then local a = music.ensureAudio(); if a then return a end end
+			return state.audio
+		end
+
+		local function playLabel(label)
+			local tr = labelToTrack[label]
+			if tr and music.play then
+				pcall(music.play, tr)
+				selectedLabel = label
+				for i, l in ipairs(currentList) do if l == label then selectedIndex = i break end end
+			end
+		end
+
+		Music:CreateSection("Library")
+		buildList("All")
+		local trackDropdown
+		local genreDropdown = Music:CreateDropdown({
+			Name = "Genre",
+			Options = sections,
+			CurrentOption = { "All" },
+			Callback = function(sel)
+				buildList(sel[1] or "All")
+				if trackDropdown then pcall(function() trackDropdown:Refresh(currentList) end) end
+			end,
+		})
+		trackDropdown = Music:CreateDropdown({
+			Name = "Track",
+			Options = currentList,
+			CurrentOption = {},
+			Callback = function(sel) selectedLabel = sel[1] end,
+		})
+
+		Music:CreateSection("Playback")
+		Music:CreateButton({ Name = "Play", Icon = "play",
+			Callback = function()
+				if selectedLabel then playLabel(selectedLabel)
+				else notify("Music", "Pick a track first.") end
+			end })
+		Music:CreateButton({ Name = "Pause / Resume", Icon = "pause",
+			Callback = function()
+				local a = audioObj()
+				if a then
+					if a.Playing then a:Pause() else pcall(function() a:Resume() end) end
+				end
+			end })
+		Music:CreateButton({ Name = "Stop", Icon = "square",
+			Callback = function() if music.stop then pcall(music.stop) end end })
+		Music:CreateButton({ Name = "Next", Icon = "skip-forward",
+			Callback = function()
+				if #currentList == 0 then return end
+				selectedIndex = (selectedIndex % #currentList) + 1
+				playLabel(currentList[selectedIndex])
+			end })
+		Music:CreateButton({ Name = "Previous", Icon = "skip-back",
+			Callback = function()
+				if #currentList == 0 then return end
+				selectedIndex = ((selectedIndex - 2) % #currentList) + 1
+				playLabel(currentList[selectedIndex])
+			end })
+		Music:CreateSlider({
+			Name = "Volume",
+			Icon = "volume-2",
+			Range = { 0, 100 },
+			Increment = 1,
+			Suffix = "%",
+			CurrentValue = 75,
+			Flag = "SX_music_vol",
+			Callback = function(v)
+				local a = audioObj()
+				if a then a.Volume = v / 100 end
+			end,
+		})
+	end
+
+	-- ==========================================================================
+	-- SETTINGS tab (rebuilds all siriusSettings categories)
+	-- ==========================================================================
+	if bridge.settingsList then
+		local Settings = Window:CreateTab("Settings", "settings")
+		local function save()
+			if bridge.saveSettings then pcall(bridge.saveSettings) end
+		end
+
+		for _, category in ipairs(bridge.settingsList) do
+			Settings:CreateSection(category.name or "General")
+			for _, setting in ipairs(category.categorySettings or {}) do
+				local st = setting.settingType
+				local nm = setting.name or "Setting"
+
+				if st == "Boolean" then
+					Settings:CreateToggle({
+						Name = nm, Description = setting.description,
+						CurrentValue = setting.current == true, Flag = "SET_" .. nm,
+						Callback = function(v) setting.current = v; save() end,
+					})
+				elseif st == "Number" then
+					local rng = setting.values or { 0, 100 }
+					local rlo, rhi = rng[1] or 0, rng[2] or 100
+					Settings:CreateSlider({
+						Name = nm, Description = setting.description,
+						Range = { rlo, rhi }, Increment = 1,
+						CurrentValue = math.clamp(math.floor((tonumber(setting.current) or rlo) + 0.5), rlo, rhi),
+						Flag = "SET_" .. nm,
+						Callback = function(v) setting.current = v; save() end,
+					})
+				elseif st == "Input" then
+					Settings:CreateInput({
+						Name = nm, PlaceholderText = setting.placeholder or "",
+						CurrentValue = tostring(setting.current or ""),
+						Callback = function(text) setting.current = text; save() end,
+					})
+				elseif st == "Dropdown" then
+					Settings:CreateDropdown({
+						Name = nm, Options = setting.values or {},
+						CurrentOption = { setting.current },
+						Callback = function(sel)
+							local v = sel[1]
+							setting.current = v
+							if setting.targetSetting and bridge.checkSetting then
+								local t = bridge.checkSetting(setting.targetSetting)
+								if t then t.current = v end
+							end
+							save()
+						end,
+					})
+				elseif st == "Key" then
+					Settings:CreateInput({
+						Name = nm, PlaceholderText = "KeyCode e.g. K, Slash, Space",
+						CurrentValue = tostring(setting.current or ""),
+						Callback = function(text)
+							setting.current = (text ~= "" and text) or nil
+							save()
+						end,
+					})
+				elseif st == "Action" then
+					Settings:CreateButton({
+						Name = nm, Description = setting.description, Icon = "zap",
+						Callback = function()
+							if setting.callback then pcall(setting.callback)
+							elseif bridge.dylanfocClient and bridge.dylanfocClient.runAction then
+								pcall(bridge.dylanfocClient.runAction, setting)
+							else notify("Settings", nm .. " unavailable.") end
+						end,
+					})
+				elseif st == "Info" then
+					Settings:CreateParagraph({
+						Title = nm,
+						Content = tostring(setting.current or "--"),
+					})
+				end
+				-- "Servers" type intentionally skipped (embedded native browser).
+			end
+		end
+	end
+
+	-- ==========================================================================
+	-- INTERFACE tab (native UI control)
+	-- ==========================================================================
+	local Interface = Window:CreateTab("Interface", "layout-grid")
+	local nativeToggle
+
 	Interface:CreateSection("Safety")
-	Interface:CreateButton({
-		Name = "Panic (stop abilities)",
-		Icon = "octagon-x",
+	Interface:CreateButton({ Name = "Panic (stop abilities)", Icon = "octagon-x",
 		Callback = function()
 			if bridge.runKeybindAction then pcall(bridge.runKeybindAction, "stopabilities") end
-		end,
-	})
+			if pa.stopAll then pcall(pa.stopAll, "Panic") end
+		end })
 
 	Interface:CreateSection("Native UI")
 	nativeToggle = Interface:CreateToggle({
@@ -28638,16 +29081,9 @@ task.spawn(function()
 		Icon = "panel-top",
 		CurrentValue = false,
 		Flag = "SX_ShowNative",
-		Description = "Bring back Sirius X's built in interface. Note: it shares state with this panel, so a native button may look stale after you flip the same feature here.",
-		Callback = function(v)
-			showNative(v)
-		end,
+		Description = "Bring back Sirius X's built in interface. It shares state with this panel, so a native button may look stale after you flip the same feature here.",
+		Callback = function(v) showNative(v) end,
 	})
 
-	Rayfield:Notify({
-		Title = "Sirius X - NextGen",
-		Content = "Loaded. Every toggle here drives real Sirius X features. Press K to hide.",
-		Duration = 6,
-		Image = "sparkles",
-	})
+	notify("Sirius X - NextGen", "Loaded. Every tab drives real Sirius X. Press K to hide.", 6)
 end)
